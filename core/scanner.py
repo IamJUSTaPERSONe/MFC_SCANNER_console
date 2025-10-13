@@ -6,7 +6,7 @@ import urllib.parse
 from typing import List, Dict, Any, Callable, Optional
 from zapv2 import ZAPv2
 
-logger = logging.getLogger(__name__)  # Исправлено: было 'name'
+logger = logging.getLogger(__name__)
 
 class ZapScanner:
     def __init__(self, api_url: str = "http://localhost:8080", api_key: str = None):
@@ -22,39 +22,78 @@ class ZapScanner:
             logger.error(f"❌ ZAP недоступен: {e} ❌")
             return False
 
-    def disable_slow_scanners(self):
-        """Отключает медленные сканеры для быстрого режима"""
+    # def disable_slow_scanners(self):
+    #     """Отключает медленные сканеры для быстрого режима"""
+    #     try:
+    #         # ID медленных и редко полезных сканеров
+    #         slow_scanner_ids = [
+    #             "40012",  # Buffer Overflow
+    #             "40014",  # Parameter Tampering
+    #             "40016",  # Cross-Domain Misconfiguration
+    #             "40017",  # Server Side Include
+    #             "40018",  # CRLF Injection
+    #             "40026",  # HTTP Response Splitting
+    #             "40027",  # Timestamp Disclosure
+    #             "40028",  # Username Hash Disclosure
+    #             "40032",  # XPath Injection
+    #             "40033",  # XSLT Injection
+    #         ]
+    #
+    #         disabled_count = 0
+    #         for scanner_id in slow_scanner_ids:
+    #             try:
+    #                 self.zap.ascan.disable_scanners(scanner_id)
+    #                 disabled_count += 1
+    #             except Exception:
+    #                 # Игнорируем если сканер не найден
+    #                 continue
+    #
+    #         logger.info(f"✅ Отключено {disabled_count} медленных сканеров")
+    #
+    #     except Exception as e:
+    #         logger.warning(f'Не удалось отключить сканеры {e}')
+
+    def diagnose_scanners(self):
+        """Показывает статус критически важных сканеров"""
         try:
-            # ID медленных и редко полезных сканеров
-            slow_scanner_ids = [
-                "40012",  # Buffer Overflow
-                "40014",  # Parameter Tampering
-                "40016",  # Cross-Domain Misconfiguration
-                "40017",  # Server Side Include
-                "40018",  # CRLF Injection
-                "40026",  # HTTP Response Splitting
-                "40027",  # Timestamp Disclosure
-                "40028",  # Username Hash Disclosure
-                "40032",  # XPath Injection
-                "40033",  # XSLT Injection
-                "40019",  # Parameter Injection
-                "40020",  # Server Side Code Injection
+            scanners = self.zap.ascan.scanners()
+
+            # Критически важные сканеры
+            critical_scanners = [
+                "SQL Injection",
+                "Cross Site Scripting",
+                "XSS",
+                "Path Traversal",
+                "OS Command Injection",
+                "Code Injection",
+                "File Inclusion"
             ]
 
-            disabled_count = 0
-            for scanner_id in slow_scanner_ids:
-                try:
-                    self.zap.ascan.disable_scanners(scanner_id)
-                    disabled_count += 1
-                except Exception:
-                    # Игнорируем если сканер не найден
-                    continue
+            enabled_critical = []
+            disabled_critical = []
 
-            logger.info(f"✅ Отключено {disabled_count} медленных сканеров")
+            for scanner in scanners:
+                name = scanner.get('name', '')
+                if any(crit in name for crit in critical_scanners):
+                    if scanner.get('enabled') == 'true':
+                        enabled_critical.append(name)
+                    else:
+                        disabled_critical.append(name)
+
+            logger.info(f"🔴 КРИТИЧЕСКИЕ СКАНЕРЫ:")
+            logger.info(f"✅ Включено: {len(enabled_critical)}")
+            for scanner in enabled_critical:
+                logger.info(f"      - {scanner}")
+
+            logger.info(f"❌ Отключено: {len(disabled_critical)}")
+            for scanner in disabled_critical[:5]:  # Первые 5
+                logger.info(f" - {scanner}")
+
+            return len(enabled_critical) > 0
 
         except Exception as e:
-            logger.warning(f'Не удалось отключить сканеры {e}')
-
+            logger.error(f"Ошибка диагностики сканеров: {e}")
+            return False
 
     def _filter_alerts(self, alerts, scan_mode: str):
         """Агрессивная фильтрация уязвимостей в зависимости от режима"""
@@ -62,55 +101,23 @@ class ZapScanner:
 
         # РАСШИРЕННЫЙ СПИСОК ЛОЖНЫХ СРАБАТЫВАНИЙ
         false_positives = [
-            # Информационные утечки
             "Server Leaks Version Information",
             "Server Leaks Information via",
             "X-Powered-By Header",
             "X-AspNet-Version Response Header",
             "X-Debug-Token Link",
-            "X-Backend-Server",
             "Application Error Disclosure",
-
-            # Заголовки безопасности (часто ложные)
             "Content Security Policy (CSP) Header Not Set",
             "X-Content-Type-Options Header Missing",
             "X-Frame-Options Header Not Set",
             "Missing Anti-clickjacking Header",
-            "Strict-Transport-Security Header Not Set",
-            "Cross-Domain Misconfiguration",
-
-            # Куки (обычно не критично)
             "Cookie No HttpOnly Flag",
             "Cookie Without Secure Flag",
-            "Session Cookie Missing Secure Flag",
-
-            # Другие не критичные
             "Absence of Anti-CSRF Tokens",
             "Cross-Domain JavaScript Source File Inclusion",
-            "Information Disclosure - Debug Error Messages",
             "Private IP Disclosure",
             "Timestamp Disclosure",
             "Username Hash Disclosure",
-            "User Agent Fuzzing",
-            "Backup File Disclosure",
-            "Directory Browsing",
-            "Buffer Overflow",
-            "CRLF Injection",
-            "HTTP Response Splitting"
-        ]
-
-        # РЕАЛЬНЫЕ УЯЗВИМОСТИ
-        real_vulnerabilities = [
-            "SQL Injection",
-            "Cross Site Scripting",
-            "Path Traversal",
-            "Remote File Inclusion",
-            "OS Command Injection",
-            "Code Injection",
-            "XPath Injection",
-            "LDAP Injection",
-            "XML External Entity",
-            "Server-Side Request Forgery"
         ]
 
         for alert in alerts:
@@ -124,9 +131,16 @@ class ZapScanner:
             # Для быстрого режима супер агрессивная фильтрация
             if scan_mode == "fast":
                 # Только High риски и реальные уязвимости
-                if risk != "High":
-                    continue
-                if not any(real in name for real in real_vulnerabilities):
+                if risk == "High":
+                    pass
+                elif risk == "Medium":
+                    important_medium = [
+                        "SQL Injection", "XSS", "Path Traversal",
+                    "Command Injection", "File Upload"
+                    ]
+                    if not any(imp in name for imp in important_medium):
+                        continue
+                else:
                     continue
 
             # Для среднего режима
@@ -134,13 +148,12 @@ class ZapScanner:
                 # High + Medium, но фильтруем ложные срабатывания
                 if risk not in ["High", "Medium"]:
                     continue
-                if any(fp in name for fp in false_positives):
-                    continue
 
             # для полного - только фильтруем явные ложные срабатывания
             elif scan_mode == "deep":
                 if any(fp in name for fp in false_positives):
                     continue
+
 
             # Если прошли все фильтры - добавляем
             filtered.append({
@@ -153,6 +166,38 @@ class ZapScanner:
 
         return filtered
 
+    def enable_missing_critical_scanners(self):
+        """Включает отключенные критические сканеры"""
+        try:
+            scanners = self.zap.ascan.scanners()
+
+            must_enable = [
+                "Cross Site Scripting",
+                "XSS",
+                "SQL Injection"  # базовый SQL injection
+            ]
+
+            enabled_count = 0
+            for scanner in scanners:
+                name = scanner.get('name', '')
+                scanner_id = scanner.get('id', '')
+
+                # Включаем если сканер критический И отключен
+                if any(pattern in name for pattern in must_enable):
+                    if scanner.get('enabled') != 'true':
+                        try:
+                            self.zap.ascan.enable_scanners(scanner_id)
+                            enabled_count += 1
+                            logger.info(f"✅ ВКЛЮЧЕН: {name}")
+                        except Exception as e:
+                            logger.warning(f"Не удалось включить {name}: {e}")
+
+            if enabled_count > 0:
+                logger.info(f"🎯 Включено недостающих сканеров: {enabled_count}")
+
+        except Exception as e:
+            logger.error(f"Ошибка включения сканеров: {e}")
+
     # Основное сканирование
     def scan(
         self,
@@ -163,34 +208,38 @@ class ZapScanner:
 
         depth_configs = {
             'fast': {
-                'max_duration': 2,  # 2 минут
-                'max_children': 5,  # 5 дочерних узлов
-                'max_depth': 1,
-                'attack_strength': 'LOW',
-                'alert_threshold': 'HIGH',  # Только high угрозы
-                'timeout': 120,
-                'disable_slow_scanners': True
-            },
-            'medium': {
-                'max_duration': 8,  # 8 минут
+                'max_duration': 3,  # 3 минут
                 'max_children': 10,  # 10 дочерних узлов
                 'max_depth': 2,
                 'attack_strength': 'MEDIUM',
                 'alert_threshold': 'MEDIUM',
-                'timeout': 500,
+                'timeout': 180,
+                'disable_slow_scanners': True
+            },
+            'medium': {
+                'max_duration': 10,  # 10 минут
+                'max_children': 20,  # 20 дочерних узлов
+                'max_depth': 3,
+                'attack_strength': 'MEDIUM',
+                'alert_threshold': 'MEDIUM',
+                'timeout': 600,
                 'disable_slow_scanners': False
             },
             'deep': {
-                'max_duration': 20,  # 20 минут
-                'max_children': 25,  # 25 дочерних узлов
-                'max_depth': 3,
+                'max_duration': 25,  # 25 минут
+                'max_children': 30,  # 30 дочерних узлов
+                'max_depth': 4,
                 'attack_strength': 'HIGH',
                 'alert_threshold': 'LOW',
-                'timeout': 1300,
+                'timeout': 1500,
                 'disable_slow_scanners': False
             }
         }
+        has_critical_scanners = self.diagnose_scanners()
+        if not has_critical_scanners:
+            logger.error("❌ КРИТИЧЕСКАЯ ОШИБКА: Нет включенных критических сканеров!")
         config = depth_configs.get(scan_mode, depth_configs['fast'])
+        self.enable_missing_critical_scanners()
 
         try:
             # НАСТРОЙКИ SPIDER
@@ -199,12 +248,17 @@ class ZapScanner:
 
             # НАСТРОЙКИ ACTIVE SCAN
             self.zap.ascan.set_option_max_scan_duration_in_mins(config["max_duration"])
-            self.zap.ascan.set_option_attack_strength = config["attack_strength"]
-            self.zap.ascan.set_option_alert_threshold = config["alert_threshold"]
+
+            # Настройка через установку значений атрибутов
+            self.zap.ascan.option_attack_strength = "HIGH"  # Всегда HIGH для теста!
+            self.zap.ascan.option_alert_threshold = "LOW"  # Всегда LOW для теста!
+
+            logger.info("✅ Применены агрессивные настройки: HIGH интенсивность, LOW порог")
+
 
            # Отключение медленных сканеров
-            if config['disable_slow_scanners']:
-                self.disable_slow_scanners()
+           #  if config['disable_slow_scanners']:
+           #      self.disable_slow_scanners()
 
             logger.info(f'Применен режим {scan_mode}: {config['max_duration']}, максимальная глубина {config['max_depth']}')
 
@@ -269,12 +323,12 @@ class ZapScanner:
         start_time = time.time()
 
         scan_durations = {
-            'fast': 120,  # 2 min
-            'medium': 480,  # 8 min
-            'deep': 1200   # 20 min
+            'fast': 180,  # 3 min
+            'medium': 600,  # 10 min
+            'deep': 1500   # 25 min
         }
 
-        scan_duration = scan_durations.get(scan_mode, 480)
+        scan_duration = scan_durations.get(scan_mode, 600)
 
         while True:
             try:
@@ -328,7 +382,7 @@ class ZapScanner:
 
             from collections import Counter
             alert_names = [alert.get('name', 'Unknown') for alert in alerts]
-            common_alerts = Counter(alert_names).most_common(10)  # Увеличил до 10 для лучшей диагностики
+            common_alerts = Counter(alert_names).most_common(10)
             logger.info(f"🔝 Топ-10 типов уязвимостей: {common_alerts}")
 
             filtered_alerts = self._filter_alerts(alerts, scan_mode)
@@ -342,6 +396,7 @@ class ZapScanner:
             logger.info(f"✅ После фильтрации: {len(filtered_alerts)} уязвимостей {filtered_stats}")
 
             return filtered_alerts
+
 
         except Exception as e:
             logger.error(f"❌ Ошибка при получении предупреждений: {e} ❌")

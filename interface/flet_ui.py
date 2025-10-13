@@ -378,20 +378,20 @@ class VulnerabilityScannerUI:
                         ft.Text(f"{vuln['name'][:50]}",
                                 weight="bold",
                                 color=color,
-                                size=15,
+                                size=13,
                                 expand=True),
                         ft.Container(
                             content=ft.Text(vuln['risk'], color=color, weight="bold", size=10),
                             bgcolor=ft.Colors.with_opacity(0.2, color),
-                            padding=ft.padding.symmetric(horizontal=8, vertical=4),
+                            padding=ft.padding.symmetric(horizontal=6, vertical=2),
                             border_radius=4
                         )
                     ]),
                     ft.Text(f"URL: {vuln['url']}",
                             size=12,
                             color=COLORS["text_secondary"]),
-                    ft.Text(vuln['description'][:200] + "...",
-                            size=10,
+                    ft.Text(vuln['description'][:150] + "...",
+                            size=9,
                             color=COLORS["text_secondary"])
                 ], spacing=6),
                 padding=10,
@@ -448,6 +448,21 @@ class VulnerabilityScannerUI:
             # Запуск сканирования
             vulnerabilities = scanner.scan(url, on_progress=self.update_progress, scan_mode=scan_mode)
 
+            # Генерация отчёта
+            report_path = generate_html_report()
+            self.status_text.value = f"✅ Сканирование завершено"
+            self.progress_text.value = "100%"
+
+            # Кнопка открытия отчёта
+            report_btn = ft.FilledButton(
+                content=ft.Row([
+                    ft.Icon(ft.Icons.ARTICLE, color=COLORS["bg_primary"]),
+                    ft.Text("Открыть полный отчёт", color=COLORS["primary"])
+                ]),
+                on_click=lambda e: self.open_report(report_path),
+                style=ft.ButtonStyle(bgcolor=COLORS["success"])
+            )
+            self.results_area.controls.append(report_btn)
 
             # Отображение результатов
             if not vulnerabilities:
@@ -479,21 +494,7 @@ class VulnerabilityScannerUI:
                 for vuln in vulnerabilities[:15]:
                     self.add_result(vuln)
 
-            # Генерация отчёта
-            report_path = generate_html_report()
-            self.status_text.value = f"✅ Сканирование завершено"
-            self.progress_text.value = "100%"
 
-            # Кнопка открытия отчёта
-            report_btn = ft.FilledButton(
-                content=ft.Row([
-                    ft.Icon(ft.Icons.ARTICLE, color=COLORS["bg_primary"]),
-                    ft.Text("Открыть полный отчёт", color=COLORS["primary"])
-                ]),
-                on_click=lambda e: self.open_report(report_path),
-                style=ft.ButtonStyle(bgcolor=COLORS["success"])
-            )
-            self.results_area.controls.append(report_btn)
 
         except Exception as ex:
             self.show_error(f"💥 Ошибка: {str(ex)}")
