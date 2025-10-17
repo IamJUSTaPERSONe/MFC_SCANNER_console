@@ -95,6 +95,63 @@ class ZapScanner:
             logger.error(f"Ошибка диагностики сканеров: {e}")
             return False
 
+    def remove_duplicate(self, alerts):
+        """Удаляет дубликаты уязвимостей"""
+        seen = set()
+        unique_alerts = []
+
+        for alert in alerts:
+            base_url = alert['url'].split('?')[0]
+            key = f'{alert['name']} | {base_url}'
+
+            if key not in seen:
+                seen.add(key)
+                unique_alerts.append(alert)
+
+        logger.info(f'Найдено уникальных уязвимостей: {len(unique_alerts)}, было {len(alerts)}')
+        return unique_alerts
+
+    def _group_similar_vulnerabilities(self, alerts):
+        """Группирует похожие уязвимости чтобы избежать дублирования"""
+        grouped = {}
+
+        for alert in alerts:
+            # Создаем ключ группировки: тип + риск
+            key = f"{alert['name']}|{alert['risk']}"
+
+            if key not in grouped:
+                grouped[key] = {
+                    'name': alert['name'],
+                    'risk': alert['risk'],
+                    'count': 1,
+                    'examples': [alert['url']],
+                    'description': alert['description'],
+                    'solution': alert['solution']
+                }
+            else:
+                grouped[key]['count'] += 1
+                if len(grouped[key]['examples']) < 3:
+                    grouped[key]['examples'].append(alert['url'])
+
+        # Преобразуем обратно в список
+        result = []
+        for key, group in grouped.items():
+            if group['count'] > 1:
+                group['name'] = f"{group['name']} (найдено в {group['count']} местах)"
+                group['description'] = f"Обнаружено в {group['count']} URL. Примеры:\n" + "\n".join(
+                    group['examples'][:3])
+
+            result.append({
+                'name': group['name'],
+                'risk': group['risk'],
+                'url': group['examples'][0],  # Первый пример
+                'description': group['description'],
+                'solution': group['solution']
+            })
+
+        logger.info(f"🔗 Сгруппировано уязвимостей: {len(result)} (было {len(alerts)})")
+        return result
+
     def _filter_alerts(self, alerts, scan_mode: str):
         """Агрессивная фильтрация уязвимостей в зависимости от режима"""
         filtered = []
@@ -118,6 +175,18 @@ class ZapScanner:
             "Private IP Disclosure",
             "Timestamp Disclosure",
             "Username Hash Disclosure",
+            "User Agent Fuzzer"
+        ]
+
+        real_high_vulnerabilities = [
+            "SQL Injection",
+            "Cross Site Scripting",
+            "XSS",
+            "Path Traversal",
+            "Remote File Inclusion",
+            "OS Command Injection",
+            "Code Injection",
+            "Remote Code Execution",
         ]
 
         for alert in alerts:
@@ -128,6 +197,12 @@ class ZapScanner:
             if risk == "Informational":
                 continue
 
+            if risk == 'High':
+                if any(fp in name for fp in false_positives):
+                    risk = 'Medium'
+                elif not any(real in name for real in real_high_vulnerabilities):
+                    risk = 'Medium'
+
             # Для быстрого режима супер агрессивная фильтрация
             if scan_mode == "fast":
                 # Только High риски и реальные уязвимости
@@ -136,7 +211,7 @@ class ZapScanner:
                 elif risk == "Medium":
                     important_medium = [
                         "SQL Injection", "XSS", "Path Traversal",
-                    "Command Injection", "File Upload"
+                    "Command Injection", "File Upload", "Cross Site Scripting", "Code Injection",
                     ]
                     if not any(imp in name for imp in important_medium):
                         continue
@@ -147,6 +222,8 @@ class ZapScanner:
             elif scan_mode == "medium":
                 # High + Medium, но фильтруем ложные срабатывания
                 if risk not in ["High", "Medium"]:
+                    continue
+                if any(fp in name for fp in false_positives):
                     continue
 
             # для полного - только фильтруем явные ложные срабатывания
@@ -211,10 +288,9 @@ class ZapScanner:
                 'max_duration': 3,  # 3 минут
                 'max_children': 10,  # 10 дочерних узлов
                 'max_depth': 2,
-                'attack_strength': 'MEDIUM',
+                'attack_strength': 'LOW',
                 'alert_threshold': 'MEDIUM',
                 'timeout': 180,
-                'disable_slow_scanners': True
             },
             'medium': {
                 'max_duration': 10,  # 10 минут
@@ -223,7 +299,6 @@ class ZapScanner:
                 'attack_strength': 'MEDIUM',
                 'alert_threshold': 'MEDIUM',
                 'timeout': 600,
-                'disable_slow_scanners': False
             },
             'deep': {
                 'max_duration': 25,  # 25 минут
@@ -232,14 +307,13 @@ class ZapScanner:
                 'attack_strength': 'HIGH',
                 'alert_threshold': 'LOW',
                 'timeout': 1500,
-                'disable_slow_scanners': False
             }
         }
+        config = depth_configs.get(scan_mode, depth_configs['fast'])
+        self.enable_missing_critical_scanners()
         has_critical_scanners = self.diagnose_scanners()
         if not has_critical_scanners:
             logger.error("❌ КРИТИЧЕСКАЯ ОШИБКА: Нет включенных критических сканеров!")
-        config = depth_configs.get(scan_mode, depth_configs['fast'])
-        self.enable_missing_critical_scanners()
 
         try:
             # НАСТРОЙКИ SPIDER
@@ -250,21 +324,14 @@ class ZapScanner:
             self.zap.ascan.set_option_max_scan_duration_in_mins(config["max_duration"])
 
             # Настройка через установку значений атрибутов
-            self.zap.ascan.option_attack_strength = "HIGH"  # Всегда HIGH для теста!
-            self.zap.ascan.option_alert_threshold = "LOW"  # Всегда LOW для теста!
+            self.zap.ascan.option_attack_strength = config["attack_strength"]
+            self.zap.ascan.option_alert_threshold = config["alert_threshold"]
 
-            logger.info("✅ Применены агрессивные настройки: HIGH интенсивность, LOW порог")
-
-
-           # Отключение медленных сканеров
-           #  if config['disable_slow_scanners']:
-           #      self.disable_slow_scanners()
-
-            logger.info(f'Применен режим {scan_mode}: {config['max_duration']}, максимальная глубина {config['max_depth']}')
-
+            logger.info(f"✅ Применены настройки: {config['attack_strength']} интенсивность")
 
         except Exception as e:
             logger.warning(f"Не удалось применить часть настроек: {e}")
+
 
         if not target_url.startswith(('http://', 'https://')):
                 raise ValueError("URL должен начинаться с http:// или https://")
@@ -303,7 +370,7 @@ class ZapScanner:
                         print()  # новая строка только в консоли
                     logger.info("✅ Сканирование SPIDER завершено")
                     break
-                time.sleep(2)
+                time.sleep(3)
 
             except Exception as e:
                 if not on_progress:
@@ -372,6 +439,7 @@ class ZapScanner:
             # Безопасное получение результатов
         try:
             alerts = self.zap.core.alerts(baseurl=target_url)
+            alerts = self.remove_duplicate(alerts)
 
             risk_distribution = {}
             for alert in alerts:
@@ -386,6 +454,7 @@ class ZapScanner:
             logger.info(f"🔝 Топ-10 типов уязвимостей: {common_alerts}")
 
             filtered_alerts = self._filter_alerts(alerts, scan_mode)
+            filtered_alerts = self._group_similar_vulnerabilities(filtered_alerts)  # ← Группируем
 
             # Диагностика после фильтрации
             filtered_stats = {}

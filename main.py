@@ -20,7 +20,7 @@ def run_console_scan(target_url: str, scan_mode: str = 'fast'):
     vulnerabilities = scanner.scan(target_url, scan_mode=scan_mode)
 
     report_path = generate_html_report()
-    print(f"✅ Найдено уязвимостей: {len(vulnerabilities)}")
+    # print(f"✅ Найдено уязвимостей: {len(vulnerabilities)}")
     print(f"📄 Отчёт сохранён: {report_path}")
 
     for v in vulnerabilities[:3]:  # первые 3 уязвимости

@@ -1,5 +1,4 @@
 import time
-import urllib.parse
 import flet as ft
 from core.scanner import ZapScanner
 from core.report import generate_html_report
@@ -25,21 +24,24 @@ help_text = """
 Это приложение автоматически проверяет сайты на наличие уязвимостей с помощью инструмента OWASP ZAP.
 
 Возможности:
-- Анализ структуры сайта с помощью инструмента SPIDER
-- Поиск уязвимостей (XSS, SQLi и др)
-- Генерация отчета 
+⸻⸻⸻⸻
+➙  Анализ структуры сайта с помощью инструмента SPIDER
+➙  Поиск уязвимостей (XSS, SQLi и др)
+➙  Генерация отчета 
 
 ПРЕДУПРЕЖДЕНИЯ:
-- Перед сканированием убедитесь, что ZAP запущен: docker-compose up -d
-- НЕ СКАНИРУЙТЕ САЙТЫ БЕЗ РАЗРЕШЕНИЯ
-- Для тестового запуска используйте: https://testhtml5.vulnweb.com
+⸻⸻⸻⸻⸻
+➙  Перед сканированием убедитесь, что ZAP запущен: docker-compose up -d
+➙  НЕ СКАНИРУЙТЕ САЙТЫ БЕЗ РАЗРЕШЕНИЯ 
+➙  Для тестового запуска используйте: https://testhtml5.vulnweb.com
 
 О режимах работы:
-- Быстрое сканирование (до 5 минут) -> поверхностно сканирует до пяти дочерних узлов. Только критические уязвимости
-- Стандартное сканирование (до 10 минут) -> оптимальное сканирование до десяти дочерних узлов. 
-- Полное сканирование (до 20 минут) -> сканирует до двадцати пяти дочерних узлов. Максимальная проверка
+⸻⸻⸻⸻⸻
+➙  Быстрое сканирование (до 5 минут) -> поверхностно сканирует до десяти дочерних узлов. Только критические уязвимости
+➙  Стандартное сканирование (до 10 минут) -> оптимальное сканирование до двадцати дочерних узлов. 
+➙  Полное сканирование (до 20 минут) -> сканирует до двадцати пяти дочерних узлов. Максимальная проверка
 
-Проект для безопасности информационной жизни, 2025
+⚝ Проект для безопасности информационной жизни, 2025 ⚝
 """
 
 
@@ -47,19 +49,166 @@ class VulnerabilityScannerUI:
     def __init__(self, page: ft.Page):
         self.page = page
         self.setup_page()
+        self.scan_history = self.load_history()  # Загружает историю при запуске
         self.create_ui()
-        self.scan_history = []
 
-    def add_to_history(self, url: str, vulnerabilities: list):
-        # Добавляет сканирование в историю
-        self.scan_history.append({
+    # Загружает историю из локального хранилища
+    def load_history(self):
+        try:
+            history = self.page.client_storage.get('scan_history')
+            return  history if history else []
+        except:
+            return []
+
+    # Сохраняет историю
+    def save_history(self):
+        try:
+            self.page.client_storage.set('scan_history', self.scan_history)
+        except Exception as e:
+            print(f'Ошибка сохранения истории {e}')
+
+    # Добавляет сканирование в историю
+    def add_history(self, url: str, vulnerabilities: list, scan_mode: str, duration: float):
+        history_item = {
+            'id': int(time.time()),
             'timestamp': time.time(),
+            'date': time.strftime('%d.%m.%Y %H:%M'),
             'url': url,
+            'scan_mode': scan_mode,
+            'duration': duration,
             'vulnerabilities_count': len(vulnerabilities),
-            'vulnerabilities': vulnerabilities
-        })
-        # Сохранение в LocalStorage
-        self.page.client_storage.set('scan_history', self.scan_history)
+            'risk_stats': self._calculate_status(vulnerabilities),
+            'vulnerabilities': vulnerabilities[:5]  # Сохраняет первые 5
+        }
+        self.scan_history.append(history_item)
+
+        if len(self.scan_history) > 10:
+            self.scan_history = self.scan_history[-10:]
+        self.save_history()
+
+    # Рассчитывает статистику по рискам
+    def _calculate_status(self, vulnerabilities):
+        status = {'High':0, 'Medium': 0, 'Low': 0}
+        for vuln in vulnerabilities:
+            risk = vuln.get('risk', 'Low')
+            if risk in status:
+                status[risk] += 1
+        return status
+
+    # Показывает историю
+    def show_history(self, e):
+        if not self.scan_history:
+            content = ft.Container(
+                content=ft.Column([
+                    ft.Icon(ft.Icons.HISTORY, size=40, color=COLORS['text_secondary']),
+                    ft.Text('История сканирования пуста', color=COLORS['text_secondary'],
+                            text_align=ft.TextAlign.CENTER)
+                ], horizontal_alignment=ft.CrossAxisAlignment.CENTER),
+                padding=20
+            )
+        else:
+            history_items = []
+
+            for scan in reversed(self.scan_history):
+                if scan['risk_stats']['High'] > 0:
+                    color = COLORS['error']
+                    icon = ft.Icons.WARNING
+                elif scan['risk_stats']['Medium'] > 0:
+                    color = COLORS['warning']
+                    icon = ft.Icons.INFO
+                else:
+                    color = COLORS['success']
+                    icon = ft.Icons.CHECK_CIRCLE
+
+                history_item = ft.Card(
+                    content=ft.Container(
+                        content=ft.Column([
+                            # Первая строка: иконка, URL, дата
+                            ft.Row([
+                                ft.Icon(icon, color=color, size=20),
+                                ft.Text(scan['url'],
+                                        color=COLORS["text_primary"],
+                                        weight=ft.FontWeight.BOLD,
+                                        expand=True),
+                                ft.Text(scan['date'],
+                                        color=COLORS["text_secondary"],
+                                        size=12)
+                            ]),
+
+                            # Вторая строка: статистика
+                            ft.Row([
+                                ft.Text(f"🔴 {scan['risk_stats']['High']} ", color=COLORS["error"]),
+                                ft.Text(f"🟡 {scan['risk_stats']['Medium']} ", color=COLORS["warning"]),
+                                ft.Text(f"🔵 {scan['risk_stats']['Low']} ", color=COLORS["secondary"]),
+                                ft.Text(f"• {scan['scan_mode']}", color=COLORS["text_secondary"], size=12),
+                                ft.Container(expand=True),
+                                ft.Text(f"{scan['duration']:.1f}с", color=COLORS["text_secondary"], size=12)
+                            ]),
+
+                            # Кнопки действий
+                            ft.Row([
+                                ft.TextButton(
+                                    "Повторить",
+                                    icon=ft.Icons.PLAY_ARROW,
+                                    # on_click=lambda e, url=scan['url']: self.rescan_from_history(url)
+                                ),
+                                ft.TextButton(
+                                    "Подробнее",
+                                    icon=ft.Icons.VISIBILITY,
+                                    # on_click=lambda e, scan_id=scan['id']: self.show_scan_details(scan_id)
+                                ),
+                            ])
+                        ], spacing=8),
+                        padding=15,
+                        bgcolor=ft.Colors.with_opacity(0.05, color)
+                    ),
+                    elevation=2
+                )
+                history_items.append(history_item)
+
+            content = ft.Column(
+                controls=history_items,
+                scroll=ft.ScrollMode.ADAPTIVE,
+                height=400
+            )
+
+        dlg = ft.AlertDialog(
+            title=ft.Row([
+                ft.Icon(ft.Icons.HISTORY, color=COLORS["primary"]),
+                ft.Text("История сканирований", color=COLORS["text_primary"])
+            ]),
+            content=content,
+            actions=[
+                ft.TextButton("Очистить историю",
+                              on_click=self.clear_history,
+                              style=ft.ButtonStyle(color=COLORS["error"])),
+                ft.TextButton("Закрыть",
+                              on_click=lambda e: self.page.close(dlg)),
+            ],
+            actions_alignment=ft.MainAxisAlignment.END
+        )
+        self.page.open(dlg)
+
+    def rescan_from_history(self, url, dlg=None):
+        """Повторное сканирование URL из истории"""
+        self.page.close(dlg)  # Закрываем диалог истории
+        self.url_field.value = url
+        self.page.update()
+        self.start_scan(None)  # Запускаем сканирование
+
+    def clear_history(self, e, dlg=None):
+        """Очищает историю сканирований"""
+        self.scan_history = []
+        self.save_history()
+        self.page.close(dlg)
+        self.show_snackbar("🗑️ История очищена")
+
+    def show_snackbar(self, message: str):
+        """Показывает всплывающее уведомление"""
+        self.page.snack_bar = ft.SnackBar(content=ft.Text(message))
+        self.page.snack_bar.open = True
+        self.page.update()
+
 
     # Проверяет доступность сайта
     def check_site_availability(self, url: str) -> tuple[bool, str]:
@@ -80,7 +229,6 @@ class VulnerabilityScannerUI:
                 return True, "✅ Сайт доступен"
             else:
                 return False, f"❌ Сайт недоступен (код: {response.status_code})"
-
         except requests.exceptions.ConnectionError:
             return False, "❌ Не удалось подключиться к сайту"
         except requests.exceptions.Timeout:
@@ -206,6 +354,14 @@ class VulnerabilityScannerUI:
             on_click=self.show_help
         )
 
+        # Кнопка истории
+        self.history_icon = ft.IconButton(
+            icon=ft.Icons.HISTORY,
+            icon_color=COLORS['text_secondary'],
+            tooltip='История сканирования',
+            on_click=self.show_history
+        )
+
         # Основной контейнер
         main_card = ft.Card(
             content=ft.Container(
@@ -213,6 +369,7 @@ class VulnerabilityScannerUI:
                     # Заголовок и кнопка справки
                     ft.Row([
                         ft.Container(expand=True),
+                        self.history_icon,
                         self.help_icon
                     ]),
                     header,
@@ -411,6 +568,7 @@ class VulnerabilityScannerUI:
         self.page.update()
         self.clear_results()
         url = self.url_field.value.strip()
+        start_time = time.time()
         scan_mode = self.scan_mode.value  # Получаем выбранный режим сканирования
 
 
@@ -448,6 +606,8 @@ class VulnerabilityScannerUI:
             # Запуск сканирования
             vulnerabilities = scanner.scan(url, on_progress=self.update_progress, scan_mode=scan_mode)
 
+            duration = time.time() - start_time
+            self.add_history(url, vulnerabilities, scan_mode, duration)
             # Генерация отчёта
             report_path = generate_html_report()
             self.status_text.value = f"✅ Сканирование завершено"
@@ -493,8 +653,6 @@ class VulnerabilityScannerUI:
                 )
                 for vuln in vulnerabilities[:15]:
                     self.add_result(vuln)
-
-
 
         except Exception as ex:
             self.show_error(f"💥 Ошибка: {str(ex)}")
